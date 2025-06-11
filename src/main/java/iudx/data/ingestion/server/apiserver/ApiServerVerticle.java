@@ -1,6 +1,6 @@
 package iudx.data.ingestion.server.apiserver;
 
-import static iudx.data.ingestion.server.apiserver.response.ResponseUrn.SUCCESS;
+import static iudx.data.ingestion.server.apiserver.response.ResponseUrn.*;
 import static iudx.data.ingestion.server.apiserver.util.Constants.API;
 import static iudx.data.ingestion.server.apiserver.util.Constants.API_ENDPOINT;
 import static iudx.data.ingestion.server.apiserver.util.Constants.APPLICATION_JSON;
@@ -144,15 +144,17 @@ public class ApiServerVerticle extends AbstractVerticle {
     router.route().handler(BodyHandler.create());
 
     FailureHandler validationsFailureHandler = new FailureHandler();
-    ValidationHandler postEntitiesValidationHandler =
-        new ValidationHandler(RequestType.ENTITY);
+   /* ValidationHandler postEntitiesValidationHandler =
+        new ValidationHandler(RequestType.ENTITY);*/
     Api apis = Api.getInstance(dxApiBasePath);
 
-
-    router.post(apis.getEntitiesEndpoint()).consumes(APPLICATION_JSON)
-        .handler(postEntitiesValidationHandler)
+    router
+        .post(apis.getEntitiesEndpoint())
+        //.consumes(APPLICATION_JSON)
+        .handler(this:: PostEntitiesValidationHandler)
         .handler(AuthHandler.create(vertx, apis))
-        .handler(this::handleEntitiesPostQuery).failureHandler(validationsFailureHandler);
+        .handler(this::handleEntitiesPostQuery)
+        .failureHandler(validationsFailureHandler);
 
     ValidationHandler postIngestionValidationHandler =
         new ValidationHandler(RequestType.INGEST);
@@ -160,16 +162,20 @@ public class ApiServerVerticle extends AbstractVerticle {
     ValidationHandler deleteIngestionValidationHandler =
         new ValidationHandler(RequestType.INGEST_DELETE);
 
-    router.post(apis.getIngestionEndpoint()).consumes(APPLICATION_JSON)
+    router
+        .post(apis.getIngestionEndpoint())
+        .consumes(APPLICATION_JSON)
         .handler(postIngestionValidationHandler)
         .handler(AuthHandler.create(vertx, apis))
-        .handler(this::handleIngestPostQuery).handler(validationsFailureHandler);
+        .handler(this::handleIngestPostQuery)
+        .failureHandler(validationsFailureHandler);
 
-    router.delete(apis.getIngestionEndpoint()).consumes(APPLICATION_JSON)
+    router
+        .delete(apis.getIngestionEndpoint())
         .handler(deleteIngestionValidationHandler)
         .handler(AuthHandler.create(vertx, apis))
         .handler(this::handleIngestDeleteQuery)
-        .handler(validationsFailureHandler);
+        .failureHandler(validationsFailureHandler);
 
     /* Static Resource Handler */
     /* Get openapiv3 spec */
@@ -237,47 +243,59 @@ public class ApiServerVerticle extends AbstractVerticle {
    *
    * @param routingContext RoutingContext Object
    */
-
   private void handleEntitiesPostQuery(RoutingContext routingContext) {
-    LOGGER.debug("Info:handleEntitiesPostQuery method started.");
-    JsonObject requestJson = routingContext.getBodyAsJson();
-    LOGGER.debug("Info: request Json :: ;" + requestJson);
+    LOGGER.debug("Info: handleEntitiesPostQuery method started.");
 
-    // ValidatorsHandlersFactory validationFactory = new ValidatorsHandlersFactory();
-    String id = requestJson.getString(ID);
-    LOGGER.info("ID " + id);
-    /* Handles HTTP response from server to client */
+    JsonArray request =  routingContext.body().asJsonArray();
+    String id = request.getJsonObject(0).getString(ID);
     HttpServerResponse response = routingContext.response();
-    Future<JsonObject> catItem = catalogueService.getCatItem(id);
-    catItem.onComplete(catRsp -> {
+
+    catalogueService.getCatItem(id).onComplete(catRsp -> {
       if (catRsp.succeeded()) {
-        LOGGER.info("Success: ID Found in Catalouge.");
+        LOGGER.info("Success: ID Found in Catalogue.");
         JsonObject catItemJson = catRsp.result();
-        requestJson.put("catItem", catItemJson);
-        databroker.publishData(requestJson, handler -> {
+        databroker.publishData(request, catItemJson, handler -> {
           if (handler.succeeded()) {
             LOGGER.info("Success: Ingestion Success");
+
             JsonObject authInfo = (JsonObject) routingContext.data().get("authInfo");
             authInfo.mergeIn(catItemJson);
+
             Future.future(fu -> updateAuditTable(authInfo));
+
             JsonObject responseJson = new JsonObject()
-                .put(JSON_TYPE, SUCCESS.getUrn())
-                .put(JSON_TITLE, SUCCESS.getMessage())
-                .put(RESULTS, new JsonArray().add(new JsonObject().put("detail",
-                    "message published successfully,ingestion success")));
-            handleSuccessResponse(response, 201, responseJson.toString());
-          } else if (handler.failed()) {
-            LOGGER.error("Fail: Ingestion Fail");
-            handleFailedResponse(response, 400, ResponseUrn.INVALID_PAYLOAD_FORMAT);
+                    .put(JSON_TYPE, SUCCESS.getUrn())
+                    .put(JSON_TITLE, SUCCESS.getMessage())
+                    .put(RESULTS, new JsonArray().add(
+                            new JsonObject()
+                                    .put("detail", "message published successfully, ingestion success")
+                                    .put("publishID", handler.result())
+                    ));
+
+            handleSuccessResponse(response, 201, responseJson.encode());
+
+          } else {
+            LOGGER.error("Fail: Ingestion Fail - {}", handler.cause().getMessage());
+
+            handleFailedResponse(
+                    response,
+                    HttpStatusCode.getByValue(400),
+                    ResponseUrn.INVALID_PAYLOAD_FORMAT,
+                    handler.cause().getMessage());
           }
         });
+
       } else {
-        LOGGER.error("Fail: ID does not exist. ");
-        handleFailedResponse(response, 404, ResponseUrn.RESOURCE_NOT_FOUND);
+        LOGGER.error("Fail: ID does not exist in Catalogue - {}", catRsp.cause().getMessage());
+
+        handleFailedResponse(
+                response,
+                HttpStatusCode.getByValue(404),
+                ResponseUrn.RESOURCE_NOT_FOUND,
+                "ID does not exist in catalogue");
       }
     });
   }
-
 
   public void handleIngestPostQuery(RoutingContext routingContext) {
     LOGGER.debug("Info:handleIngestPostQuery method started.");
@@ -378,10 +396,22 @@ public class ApiServerVerticle extends AbstractVerticle {
         .end(generateResponse(failureType, status).toString());
   }
 
+  private void handleFailedResponse(HttpServerResponse response, HttpStatusCode statusCode,
+                                    ResponseUrn ur, String message) {
+    response.putHeader(CONTENT_TYPE, APPLICATION_JSON).setStatusCode(statusCode.getValue())
+            .end(   new JsonObject().put(JSON_TYPE, ur.getUrn())
+                    .put(JSON_TITLE, statusCode.getDescription())
+                    .put(JSON_DETAIL, message).encode());
+  }
+
+
+
+
   private JsonObject generateResponse(ResponseUrn urn, HttpStatusCode statusCode) {
     return new JsonObject().put(JSON_TYPE, urn.getUrn()).put(JSON_DETAIL,
         statusCode.getDescription());
   }
+
 
   private Future<Void> updateAuditTable(JsonObject auditJson) {
     final Promise<Void> promise = Promise.promise();
@@ -428,5 +458,67 @@ public class ApiServerVerticle extends AbstractVerticle {
       }
     }
   }
+
+  private void PostEntitiesValidationHandler(RoutingContext context) {
+    LOGGER.info("PostEntitiesValidationHandler started");
+    JsonArray body;
+    try {
+      body = context.body().asJsonArray();
+      if (body == null || body.isEmpty()) {
+        throw new IllegalArgumentException("Invalid or empty JSON array");
+      }
+    } catch (Exception e) {
+      context.response()
+              .setStatusCode(400)
+              .putHeader("Content-Type", "application/json")
+              .end(new JsonObject()
+                      .put(JSON_TYPE, INVALID_PAYLOAD_FORMAT)
+                      .put(JSON_TITLE, HttpStatusCode.BAD_REQUEST.getDescription())
+                      .put(JSON_DETAIL, "Invalid request body format: expected a JSON array.")
+                      .encode());
+      return;
+    }
+
+    String commonId = null;
+
+    for (int i = 0; i < body.size(); i++) {
+      JsonObject jsonObject = body.getJsonObject(i);
+
+      // Check if 'id' exists
+      if (!jsonObject.containsKey("id")) {
+        context.response()
+                .setStatusCode(400)
+                .putHeader("Content-Type", "application/json")
+                .end(new JsonObject()
+                        .put(JSON_TYPE, INVALID_ID_VALUE)
+                        .put(JSON_TITLE, HttpStatusCode.BAD_REQUEST.getDescription())
+                        .put("message", "Each JSON object must contain an 'id' field.")
+                        .encode());
+        return;
+      }
+
+      // Check if all 'id' values are the same
+      String currentId = jsonObject.getString("id");
+      if (commonId == null) {
+        commonId = currentId;
+      } else if (!commonId.equals(currentId)) {
+        context
+            .response()
+            .setStatusCode(400)
+            .putHeader("Content-Type", "application/json")
+            .end(
+                new JsonObject()
+                    .put(JSON_TYPE, INVALID_ID_VALUE)
+                    .put(JSON_TITLE, HttpStatusCode.BAD_REQUEST.getDescription())
+                    .put(JSON_DETAIL, "All 'id' values must be the same.")
+                    .encode());
+        return;
+      }
+    }
+
+    // If validation passes, proceed to the next handler
+    context.next();
+  }
+
 
 }
