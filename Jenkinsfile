@@ -69,6 +69,7 @@ pipeline {
     stage('Unit Tests and Code Coverage Test'){
       steps{
         script {
+          sh 'sudo update-alternatives --set java /usr/lib/jvm/java-21-openjdk-amd64/bin/java'
           sh 'mkdir -p configs'
           sh 'cp /home/ubuntu/configs/di-config-test.json ./configs/config-test.json'
           sh 'cp /home/ubuntu/configs/di-config-test.json ./configs/config-dev.json'
@@ -102,6 +103,7 @@ pipeline {
         }
         cleanup{
           script{
+            sh 'sudo update-alternatives --set java /usr/lib/jvm/java-11-openjdk-amd64/bin/java'
             sh 'sudo rm -rf target/'
           }
         }
