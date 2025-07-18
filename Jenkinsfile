@@ -2,7 +2,6 @@ pipeline {
   environment {
     devRegistry = 'ghcr.io/datakaveri/di-dev'
     deplRegistry = 'ghcr.io/datakaveri/di-depl'
-    testRegistry = 'ghcr.io/datakaveri/di-test:latest'
     registryUri = 'https://ghcr.io'
     registryCredential = 'datakaveri-ghcr'
     GIT_HASH = GIT_COMMIT.take(7)
@@ -13,22 +12,68 @@ pipeline {
     }
   }
   stages {
-
+    stage('Trigger Validation') {
+      steps {
+        script {
+          def isPRComment = env.ghprbCommentBody != null
+          def changed = isImportantChange()
+          if (isPRComment || changed) {
+            echo "Trigger valid: Running pipeline due to PR comment or file changes."
+          } 
+          else {
+            echo "Skipping pipeline. Reason: No PR comment and no important file changes."
+            currentBuild.result = 'SUCCESS'
+            return
+          }
+        }
+      }
+    }
+    stage('Trivy Code Scan (Dependencies)') {
+      steps {
+        script {
+          sh '''
+            trivy fs --scanners vuln,secret,misconfig --output trivy-fs-report.txt .
+          '''
+        }
+      }
+    }
     stage('Building images') {
       steps{
         script {
           echo 'Pulled - ' + env.GIT_BRANCH
           devImage = docker.build( devRegistry, "-f ./docker/dev.dockerfile .")
           deplImage = docker.build( deplRegistry, "-f ./docker/depl.dockerfile .")
-          testImage = docker.build( testRegistry, "-f ./docker/test.dockerfile .")
         }
       }
     }
-
+    stage('Trivy Docker Image Scan and Report') {
+      steps {
+        script {
+          sh "trivy image --output trivy-dev-image-report.txt ${devImage.imageName()}"
+          sh "trivy image --output trivy-depl-image-report.txt ${deplImage.imageName()}"
+        }
+      }
+      post {
+        always {
+          archiveArtifacts artifacts: 'trivy-*.txt', allowEmptyArchive: true
+          publishHTML(target: [
+            allowMissing: true,
+            keepAll: true,
+            reportDir: '.',
+            reportFiles: 'trivy-fs-report.txt, trivy-dev-image-report.txt, trivy-depl-image-report.txt',
+            reportName: 'Trivy Reports'
+          ])
+        }
+      }
+    }
     stage('Unit Tests and Code Coverage Test'){
       steps{
-        script{
-          sh 'docker compose -f docker-compose.test.yml up test'
+        script {
+          sh 'mkdir -p configs'
+          sh 'cp /home/ubuntu/configs/di-config-test.json ./configs/config-test.json'
+          sh 'cp /home/ubuntu/configs/di-config-test.json ./configs/config-dev.json'
+          sh 'cp /home/ubuntu/configs/keystore-di.jks ./configs/keystore.jks'
+          sh 'mvn clean test checkstyle:checkstyle pmd:pmd'
         }
         xunit (
           thresholds: [ skipped(failureThreshold: '0'), failed(failureThreshold: '0') ],
@@ -53,9 +98,6 @@ pipeline {
                             )
                           }
         failure{
-          script{
-            sh 'docker compose down --remove-orphans'
-          }
           error "Test failure. Stopping pipeline execution!"
         }
         cleanup{
@@ -116,18 +158,9 @@ pipeline {
 
     stage('Continuous Deployment') {
       when {
-        allOf {
-          anyOf {
-            changeset "docker/**"
-            changeset "docs/**"
-            changeset "pom.xml"
-            changeset "src/main/**"
-            triggeredBy cause: 'UserIdCause'
-          }
-          expression {
+        expression {
             return env.GIT_BRANCH == 'origin/main';
           }
-        }
       }
       stages {
         stage('Push Images') {
