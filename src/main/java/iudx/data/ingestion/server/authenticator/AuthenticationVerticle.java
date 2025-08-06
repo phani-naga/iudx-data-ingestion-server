@@ -20,18 +20,16 @@ import org.apache.logging.log4j.Logger;
 
 /**
  * The Authentication Verticle.
+ *
  * <h1>Authentication Verticle</h1>
- * <p>
- * The Authentication Verticle implementation in the the IUDX Resource Server exposes the
- * {@link AuthenticationService} over the Vert.x Event Bus.
- * </p>
+ *
+ * <p>The Authentication Verticle implementation in the the IUDX Resource Server exposes the {@link
+ * AuthenticationService} over the Vert.x Event Bus.
  *
  * @version 1.0
  * @since 2020-05-31
  */
-
 public class AuthenticationVerticle extends AbstractVerticle {
-
 
   private static final String AUTH_SERVICE_ADDRESS = "iudx.data.ingestion.authentication.service";
   private static final Logger LOGGER = LogManager.getLogger(AuthenticationVerticle.class);
@@ -62,42 +60,49 @@ public class AuthenticationVerticle extends AbstractVerticle {
    *
    * @throws Exception which is a startup exception
    */
-
   @Override
   public void start() throws Exception {
 
-    getJwtPublicKey(vertx, config()).onSuccess(handler -> {
-      String cert = handler;
-      binder = new ServiceBinder(vertx);
-      JWTAuthOptions jwtAuthOptions = new JWTAuthOptions();
-      jwtAuthOptions.getJWTOptions().setLeeway(JWT_LEEWAY_TIME);
-      jwtAuthOptions.addPubSecKey(new PubSecKeyOptions().setAlgorithm("ES256").setBuffer(cert));
-      /*
-       * Default jwtIgnoreExpiry is false. If set through config, then that value is taken
-       */
-      boolean jwtIgnoreExpiry =
-          config().getBoolean("jwtIgnoreExpiry") != null && config().getBoolean("jwtIgnoreExpiry");
-      if (jwtIgnoreExpiry) {
-        jwtAuthOptions.getJWTOptions().setIgnoreExpiration(true).setLeeway(JWT_LEEWAY_TIME);
-        LOGGER.warn(
-            "JWT ignore expiration set to true, do not set IgnoreExpiration in production!!");
-      }
-      JWTAuth jwtAuth = JWTAuth.create(vertx, jwtAuthOptions);
+    getJwtPublicKey(vertx, config())
+        .onSuccess(
+            handler -> {
+              String cert = handler;
+              binder = new ServiceBinder(vertx);
+              JWTAuthOptions jwtAuthOptions = new JWTAuthOptions();
+              jwtAuthOptions.getJWTOptions().setLeeway(JWT_LEEWAY_TIME);
+              jwtAuthOptions.addPubSecKey(
+                  new PubSecKeyOptions().setAlgorithm("ES256").setBuffer(cert));
+              /*
+               * Default jwtIgnoreExpiry is false. If set through config, then that value is taken
+               */
+              boolean jwtIgnoreExpiry =
+                  config().getBoolean("jwtIgnoreExpiry") != null
+                      && config().getBoolean("jwtIgnoreExpiry");
+              if (jwtIgnoreExpiry) {
+                jwtAuthOptions.getJWTOptions().setIgnoreExpiration(true).setLeeway(JWT_LEEWAY_TIME);
+                LOGGER.warn(
+                    "JWT ignore expiration set to true, do not set IgnoreExpiration in production!!");
+              }
+              JWTAuth jwtAuth = JWTAuth.create(vertx, jwtAuthOptions);
 
-      dxApiBasePath = config().getString("dxApiBasePath");
-      Api apis = Api.getInstance(dxApiBasePath);
+              dxApiBasePath = config().getString("dxApiBasePath");
+              Api apis = Api.getInstance(dxApiBasePath);
 
-      jwtAuthenticationService = new JwtAuthenticationServiceImpl(vertx, jwtAuth, config(), apis);
-      /* Publish the Authentication service with the Event Bus against an address. */
+              jwtAuthenticationService =
+                  new JwtAuthenticationServiceImpl(vertx, jwtAuth, config(), apis);
+              /* Publish the Authentication service with the Event Bus against an address. */
 
-      consumer = binder.setAddress(AUTH_SERVICE_ADDRESS)
-          .register(AuthenticationService.class, jwtAuthenticationService);
-      LOGGER.info("AUTH service deployed");
-
-    }).onFailure(handler -> {
-      LOGGER.error("failed to get JWT public key from auth server");
-      LOGGER.error("Authentication verticle deployment failed.");
-    });
+              consumer =
+                  binder
+                      .setAddress(AUTH_SERVICE_ADDRESS)
+                      .register(AuthenticationService.class, jwtAuthenticationService);
+              LOGGER.info("AUTH service deployed");
+            })
+        .onFailure(
+            handler -> {
+              LOGGER.error("failed to get JWT public key from auth server");
+              LOGGER.error("Authentication verticle deployment failed.");
+            });
   }
 
   @Override
@@ -109,14 +114,17 @@ public class AuthenticationVerticle extends AbstractVerticle {
     Promise<String> promise = Promise.promise();
     webClient = createWebClient(vertx, config);
     String authCert = config.getString("dxAuthBasePath") + AUTH_CERTIFICATE_PATH;
-    webClient.get(443, config.getString("authServerHost"), authCert).send(handler -> {
-      if (handler.succeeded()) {
-        JsonObject json = handler.result().bodyAsJsonObject();
-        promise.complete(json.getString("cert"));
-      } else {
-        promise.fail("fail to get JWT public key");
-      }
-    });
+    webClient
+        .get(443, config.getString("authServerHost"), authCert)
+        .send(
+            handler -> {
+              if (handler.succeeded()) {
+                JsonObject json = handler.result().bodyAsJsonObject();
+                promise.complete(json.getString("cert"));
+              } else {
+                promise.fail("fail to get JWT public key");
+              }
+            });
     return promise.future();
   }
 }
