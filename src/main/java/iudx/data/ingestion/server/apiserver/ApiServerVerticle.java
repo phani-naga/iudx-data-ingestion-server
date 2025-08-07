@@ -151,7 +151,7 @@ public class ApiServerVerticle extends AbstractVerticle {
     router
         .post(apis.getEntitiesEndpoint())
         // .consumes(APPLICATION_JSON)
-        .handler(this::PostEntitiesValidationHandler)
+        .handler(this::postEntitiesValidationHandler)
         .handler(AuthHandler.create(vertx, apis))
         .handler(this::handleEntitiesPostQuery)
         .failureHandler(validationsFailureHandler);
@@ -358,7 +358,8 @@ public class ApiServerVerticle extends AbstractVerticle {
                                         new JsonObject()
                                             .put(
                                                 "detail",
-                                                "Creation of resource group and queue successful , Ingest data operation successful")));
+                                                "Creation of resource group and queue successful"
+                                                    + "Ingest data operation successful")));
                     handleSuccessResponse(response, 201, responseJson.toString());
                   } else if (handler.failed()) {
                     LOGGER.error("Fail: Ingestion Fail");
@@ -528,7 +529,7 @@ public class ApiServerVerticle extends AbstractVerticle {
     }
   }
 
-  private void PostEntitiesValidationHandler(RoutingContext context) {
+  private void postEntitiesValidationHandler(RoutingContext context) {
     LOGGER.info("PostEntitiesValidationHandler started");
     JsonArray body;
     try {
